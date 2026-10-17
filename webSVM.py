@@ -4,14 +4,11 @@ import pickle
 import pandas as pd
 import streamlit as st
 
-from train_svm import FITUR, METRIK_FILE, MODEL_FILE, latih_dan_simpan
+from train_models import FILE_MODEL, FITUR, METRIK_FILE, latih_dan_simpan
 
 st.set_page_config(page_title="Prediksi Penyakit Liver", page_icon="🩺",
                    layout="wide", initial_sidebar_state="expanded")
 
-# ==============================================================================
-# TAMPILAN (CSS). Warna ditulis eksplisit supaya tampilan sama di mode terang/gelap.
-# ==============================================================================
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
@@ -164,14 +161,40 @@ table.lab td.r { color:#64748B; }
 .step-d { color:#64748B; font-size:.84rem; line-height:1.5; }
 .teks { color:#334155; font-size:.95rem; line-height:1.7; }
 .kontak-row { display:flex; align-items:center; gap:.8rem; padding:.7rem 0; color:#0F172A; font-weight:600; }
+/* ---- tambahan: pemilih algoritma, kartu putusan, tabel pemenang, bar kepentingan fitur ---- */
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { color:#B9C8DC !important; font-size:.8rem !important; }
+.vcard { background:#fff; border:1px solid #E3E8EF; border-radius:16px; padding:1.1rem 1.2rem; box-shadow:0 2px 10px rgba(15,23,42,.04); height:100%; }
+.vcard-k { color:#64748B; font-size:.78rem; font-weight:700; letter-spacing:.02em; margin-bottom:.5rem; }
+.vcard-w { color:#0B2545; font-size:1.35rem; font-weight:800; letter-spacing:-.01em; line-height:1.15; }
+.vcard-v { color:#334155; font-size:.88rem; font-weight:600; margin:.35rem 0 .5rem; }
+.vcard-n { font-size:.78rem; font-weight:700; padding:.2rem .6rem; border-radius:999px; display:inline-block; }
+.n-real { background:#E3F5EC; color:#0B7A53; } .n-tidak { background:#F1F5F9; color:#475569; }
+.badge { white-space:nowrap; }
+table.lab td.win { background:#E6F7F5 !important; color:#0B6B49; font-weight:800; }
+table.lab th.c, table.lab td.c { text-align:center; }
+.kes { color:#334155; font-size:.92rem; line-height:1.65; }
+.kes b { color:#0B2545; }
+.imp { display:flex; align-items:center; gap:.7rem; margin:.38rem 0; font-size:.84rem; color:#0F172A; font-weight:600; }
+.imp-n { width:190px; flex:none; }
+.imp-b { flex:1; background:#EEF2F6; border-radius:999px; height:10px; overflow:hidden; }
+.imp-b span { display:block; height:100%; background:linear-gradient(90deg,#0E9F8E,#2DD4BF); border-radius:999px; }
+.imp-v { width:46px; text-align:right; color:#64748B; font-weight:700; flex:none; }
+.prob { margin:.9rem 0 .2rem; }
+.prob-l { color:#334155; font-size:.84rem; font-weight:600; margin-bottom:.35rem; }
+.prob-b { background:#EEF2F6; border-radius:999px; height:10px; overflow:hidden; }
+.prob-b span { display:block; height:100%; background:linear-gradient(90deg,#F59E0B,#EF4444); border-radius:999px; }
+.sama { background:#EEF6FF; border:1px solid #CFE2FA; color:#1E4E8C; border-radius:12px; padding:.7rem .95rem; font-size:.83rem; line-height:1.5; margin-bottom:1rem; }
+.beda { background:#FFF8E6; border:1px solid #F3DFA2; color:#6B4E0B; border-radius:12px; padding:.7rem .95rem; font-size:.83rem; line-height:1.5; margin-bottom:1rem; }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
+
 # Beri tahu browser bahwa halaman berbahasa Indonesia (mencegah terjemahan otomatis Edge/Chrome)
 def atur_bahasa_id():
-    js = ("<script>const d=window.parent.document.documentElement;"
-          "d.lang='id';d.setAttribute('translate','no');</script>")
+    js = ("<script>const d=window.parent.document;"
+          "d.documentElement.lang='id';d.documentElement.setAttribute('translate','no');"
+          "const m=d.createElement('meta');m.name='google';m.content='notranslate';d.head.appendChild(m);</script>")
     try:
         if hasattr(st, "iframe"):                 # Streamlit baru
             st.iframe(js, height=1)
@@ -179,7 +202,7 @@ def atur_bahasa_id():
             import streamlit.components.v1 as components
             components.html(js, height=0)
     except Exception:
-        pass                                      # tidak kritis; tampilan tetap jalan
+        pass
 
 
 atur_bahasa_id()
@@ -214,14 +237,16 @@ def hero(tag, judul, teks, stats=None):
 
 
 # ==============================================================================
-# Membaca model (svm_liver_pickle). Jika file belum ada / versi scikit-learn
-# berbeda sehingga gagal dibaca, model dilatih ulang otomatis dari CSV.
+# Membaca model. Jika file pickle belum ada / versi scikit-learn berbeda sehingga gagal
+# dibaca, kedua model dilatih ulang otomatis dari CSV (butuh sekitar 1-3 menit).
 # ==============================================================================
 @st.cache_resource(show_spinner="Menyiapkan model...")
 def muat_model():
     try:
-        with open(MODEL_FILE, "rb") as r:
-            model = pickle.load(r)
+        model = {}
+        for nama, path in FILE_MODEL.items():
+            with open(path, "rb") as r:
+                model[nama] = pickle.load(r)
         with open(METRIK_FILE) as f:
             metrik = json.load(f)
         return model, metrik
@@ -229,10 +254,16 @@ def muat_model():
         return latih_dan_simpan()
 
 
-model, metrik = muat_model()
+models, metrik = muat_model()
+M = metrik["models"]
+NAMA = ["SVM", "Random Forest"]
 med = metrik["median_fitur"]
-n_data = metrik["n_train"] + metrik["n_test"]
-lap = metrik["laporan"]
+n_data = metrik["n_total"]
+SEL = metrik["selisih_rf_minus_svm"]
+
+pct = lambda v: f"{v * 100:.1f}%"
+# model yang paling banyak menjaring pasien liver (recall tertinggi) -> pilihan awal untuk skrining
+rekom = max(NAMA, key=lambda k: M[k]["recall_liver"])
 
 # Rentang acuan umum (dewasa). Tiap laboratorium bisa berbeda.
 ACUAN = [  # (nama, indeks input, satuan, batas bawah, batas atas, format)
@@ -251,36 +282,54 @@ ACUAN = [  # (nama, indeks input, satuan, batas bawah, batas atas, format)
 # ==============================================================================
 with st.sidebar:
     H(f'<div class="brand"><div class="brand-logo">{IKON["logo"]}</div><div>'
-      '<div class="brand-name">LiverCheck</div><div class="brand-sub">Prediksi berbasis SVM</div></div></div>')
+      '<div class="brand-name">LiverCheck</div><div class="brand-sub">SVM &amp; Random Forest</div></div></div>')
     H('<div class="side-label">Menu</div>')
-    choice = st.radio("Navigasi", ["Halaman Utama", "Performa Model", "Tentang Kami", "Kontak"],
+    choice = st.radio("Navigasi", ["Halaman Utama", "Perbandingan Model", "Tentang Kami", "Kontak"],
                       label_visibility="collapsed")
+    H('<div class="side-label" style="margin-top:1.2rem">Algoritma prediksi</div>')
+    pilih = st.selectbox("Algoritma prediksi", NAMA, index=NAMA.index(rekom), label_visibility="collapsed",
+                         help="Pilihan awal adalah model yang paling banyak menjaring pasien liver (recall tertinggi).")
     H('<div class="side-foot">Aplikasi pembelajaran machine learning. '
       'Hasil prediksi bukan pengganti diagnosis dokter.</div>')
 
 
-def prediction1(x):
-    """x = list 10 fitur sesuai urutan FITUR. Mengembalikan 1 (Pasien Liver) atau 2 (Bukan)."""
-    return int(model.predict(pd.DataFrame([x], columns=FITUR))[0])
+def prediksi(nama, nilai):
+    """Mengembalikan (kelas, skor_liver). kelas 1 = pasien liver, 2 = bukan. skor hanya untuk model berprobabilitas."""
+    x = pd.DataFrame([nilai], columns=FITUR)
+    m = models[nama]
+    kelas = int(m.predict(x)[0])
+    skor = None
+    if hasattr(m, "predict_proba"):
+        skor = float(m.predict_proba(x)[0][list(m.classes_).index(1)])
+    return kelas, skor
 
 
 def fmt_acuan(lo, hi, f):
     return f"{f.format(lo)} – {f.format(hi)}"
 
 
+def lencana_kelas(k):
+    return ('<span class="badge b-hi">Pasien liver</span>' if k == 1
+            else '<span class="badge b-ok">Bukan pasien</span>')
+
+
 # ==============================================================================
 # Halaman Utama
 # ==============================================================================
 if choice == 'Halaman Utama':
-    hero("Support Vector Machine · Data Pasien Liver", "Prediksi Penyakit Liver",
-         "Masukkan hasil pemeriksaan laboratorium pasien, lalu model SVM akan memberikan prediksi awal "
-         "apakah pasien termasuk penderita penyakit liver atau bukan.",
-         [(f"{n_data}", "data pasien"), ("10", "parameter input"), ("SVM RBF", "algoritma")])
+    hero("Support Vector Machine · Random Forest", "Prediksi Penyakit Liver",
+         "Masukkan hasil pemeriksaan laboratorium pasien. Dua algoritma akan memberikan prediksi awal "
+         "apakah pasien termasuk penderita penyakit liver atau bukan, lalu hasilnya bisa dibandingkan.",
+         [(f"{n_data}", "data pasien"), ("10", "parameter input"), ("2", "algoritma")])
 
     kiri, kanan = st.columns([1.5, 1.1], gap="large")
 
     with kiri:
-        with st.form("form_pasien", border=False):
+        try:
+            form = st.form("form_pasien", border=False)
+        except TypeError:                      # Streamlit versi lama
+            form = st.form("form_pasien")
+        with form:
             with st.container(border=True, key="kartu_a"):
                 judul_seksi("user", "Data pasien", "Informasi dasar")
                 c1, c2 = st.columns(2)
@@ -313,32 +362,55 @@ if choice == 'Halaman Utama':
                 x10 = c3.number_input("Rasio A : G", 0.0, 5.0, float(med["Albumin_and_Globulin_Ratio"]),
                                       step=0.05, format="%.2f", help="Rentang acuan umum: 1,1 – 2,5")
 
-            kirim = st.form_submit_button("Jalankan prediksi", width="stretch")
+            try:
+                kirim = st.form_submit_button("Jalankan prediksi", width="stretch")
+            except TypeError:                  # Streamlit versi lama
+                kirim = st.form_submit_button("Jalankan prediksi", use_container_width=True)
 
         if kirim:
-            nilai = [x1, x2, x3, x4, x5, x6, x7, x8, x9, x10]
-            st.session_state["hasil"] = {"kelas": prediction1(nilai), "nilai": nilai}
+            st.session_state["nilai"] = [x1, x2, x3, x4, x5, x6, x7, x8, x9, x10]
 
     with kanan:
-        h = st.session_state.get("hasil")
-        if not h:
+        nilai = st.session_state.get("nilai")
+        if not nilai:
             H(f'<div class="panel kosong"><div class="kosong-ico">{IKON["doc"]}</div>'
               '<div class="kosong-t">Belum ada hasil</div>'
               '<div class="kosong-s">Isi data pasien di sebelah kiri, lalu tekan '
               '<b>Jalankan prediksi</b>. Nilai awal adalah median dari data pasien.</div></div>')
         else:
-            if h["kelas"] == 1:
-                H('<div class="hasil hasil-liver"><div class="hasil-k">HASIL PREDIKSI MODEL</div>'
+            hasil = {n: prediksi(n, nilai) for n in NAMA}
+            kelas, skor = hasil[pilih]
+            if kelas == 1:
+                H(f'<div class="hasil hasil-liver"><div class="hasil-k">HASIL PREDIKSI · {pilih.upper()}</div>'
                   '<div class="hasil-t">Terindikasi pasien liver</div>'
                   '<div class="hasil-s">Kelas 1 · pola nilai laboratorium mirip dengan pasien liver pada data latih.</div></div>')
             else:
-                H('<div class="hasil hasil-aman"><div class="hasil-k">HASIL PREDIKSI MODEL</div>'
+                H(f'<div class="hasil hasil-aman"><div class="hasil-k">HASIL PREDIKSI · {pilih.upper()}</div>'
                   '<div class="hasil-t">Tidak terindikasi pasien liver</div>'
                   '<div class="hasil-s">Kelas 2 · pola nilai laboratorium mirip dengan bukan pasien liver pada data latih.</div></div>')
 
+            # --- perbandingan kedua model ---
+            tandai = lambda n: ' <span style="color:#0E9F8E;font-weight:700">(dipakai)</span>' if n == pilih else ""
+            baris_m = "".join(
+                f'<tr><td>{n}{tandai(n)}</td>'
+                f'<td>{lencana_kelas(hasil[n][0])}</td>'
+                f'<td class="v">{pct(hasil[n][1]) if hasil[n][1] is not None else "–"}</td></tr>' for n in NAMA)
+            sepakat = hasil["SVM"][0] == hasil["Random Forest"][0]
+            ket = ('<div class="sama">Kedua algoritma <b>sepakat</b> pada hasil ini.</div>' if sepakat else
+                   '<div class="beda">Kedua algoritma <b>memberi hasil berbeda</b>. Kasus seperti ini berada dekat batas '
+                   'keputusan, jadi hasilnya perlu dibaca lebih hati-hati.</div>')
+            H('<div class="panel"><div class="panel-title">Hasil kedua algoritma</div>'
+              '<table class="lab"><tr><th>Algoritma</th><th>Prediksi</th><th>Skor liver</th></tr>'
+              f'{baris_m}</table><div class="note">Skor liver hanya tersedia pada Random Forest dan merupakan '
+              'skor model, bukan peluang klinis.</div></div>' + ket)
+
+            if skor is not None:
+                H(f'<div class="prob"><div class="prob-l">Skor pasien liver ({pilih}): <b>{pct(skor)}</b></div>'
+                  f'<div class="prob-b"><span style="width:{skor * 100:.0f}%"></span></div></div>')
+
             baris, di_luar = "", 0
             for nama, i, sat, lo, hi, f in ACUAN:
-                v = h["nilai"][i]
+                v = nilai[i]
                 if v > hi:
                     badge, di_luar = '<span class="badge b-hi">Tinggi</span>', di_luar + 1
                 elif v < lo:
@@ -347,71 +419,143 @@ if choice == 'Halaman Utama':
                     badge = '<span class="badge b-ok">Normal</span>'
                 baris += (f'<tr><td>{nama}</td><td class="v">{f.format(v)} <span style="color:#94A3B8;font-weight:500">{sat}</span></td>'
                           f'<td class="r">{fmt_acuan(lo, hi, f)}</td><td>{badge}</td></tr>')
-            H('<div class="panel"><div class="panel-title">Ringkasan nilai laboratorium</div>'
+            H('<div class="panel" style="margin-top:1rem"><div class="panel-title">Ringkasan nilai laboratorium</div>'
               f'<div style="color:#475569;font-size:.86rem;margin-bottom:.6rem"><b>{di_luar} dari {len(ACUAN)}</b> parameter berada di luar rentang acuan umum.</div>'
               '<table class="lab"><tr><th>Parameter</th><th>Nilai</th><th>Acuan</th><th></th></tr>'
               f'{baris}</table><div class="note">Rentang acuan bersifat umum untuk dewasa; nilai tiap laboratorium dapat berbeda.</div></div>')
 
-            rec = lap["1"]["recall"] * 100
             H('<div class="warn"><b>Perhatikan:</b> ini hasil model pembelajaran, bukan diagnosis medis. '
-              f'Pada data uji, model hanya mengenali sekitar {rec:.0f}% pasien liver, sehingga hasil '
+              f'Pada data uji, {pilih} mengenali sekitar {M[pilih]["recall_liver"] * 100:.0f}% pasien liver, sehingga hasil '
               '"tidak terindikasi" tetap perlu dikonfirmasi oleh dokter.</div>')
 
 # ==============================================================================
-# Performa Model
+# Perbandingan Model
 # ==============================================================================
-elif choice == 'Performa Model':
-    hero("Evaluasi", "Performa Model",
-         "Hasil pengujian model SVM pada data uji yang tidak dipakai saat pelatihan.")
-    st.write("")
-    s = st.columns(4, gap="medium")
-    kartu = [(f"{metrik['akurasi'] * 100:.1f}%", "Akurasi"),
-             (f"{metrik['akurasi_seimbang'] * 100:.1f}%", "Akurasi seimbang"),
-             (f"{lap['1']['recall'] * 100:.1f}%", "Recall pasien liver"),
-             (f"{lap['2']['recall'] * 100:.1f}%", "Recall bukan pasien liver")]
-    for kol, (v, l) in zip(s, kartu):
-        with kol:
-            H(f'<div class="stat"><div class="stat-v">{v}</div><div class="stat-l">{l}</div></div>')
+elif choice == 'Perbandingan Model':
+    hero("Evaluasi", "Perbandingan SVM vs Random Forest",
+         "Kedua algoritma dilatih dan diuji pada data yang sama, dengan pembagian data dan ukuran penilaian yang sama.")
     st.write("")
 
-    a, b = st.columns([1, 1], gap="large")
-    cm = metrik["confusion_matrix"]
+    def unggul(kunci):
+        a, b = M["SVM"][kunci], M["Random Forest"][kunci]
+        return None if abs(a - b) < 0.0005 else ("SVM" if a > b else "Random Forest")
+
+    def kartu_putusan(judul, kunci, sel_kunci):
+        w = unggul(kunci)
+        s = SEL[sel_kunci]
+        nyata = s["signifikan"]
+        sel_txt = f"selisih {abs(s['nilai']) * 100:.1f} poin"
+        badge = ('<span class="vcard-n n-real">Selisih nyata secara statistik</span>' if nyata
+                 else '<span class="vcard-n n-tidak">Selisih tidak nyata</span>')
+        H(f'<div class="vcard"><div class="vcard-k">{judul}</div>'
+          f'<div class="vcard-w">{w if (w and nyata) else (w + " (tipis)" if w else "Seimbang")}</div>'
+          f'<div class="vcard-v">SVM {pct(M["SVM"][kunci])} · RF {pct(M["Random Forest"][kunci])} · {sel_txt}</div>{badge}</div>')
+
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        kartu_putusan("AKURASI SEIMBANG (UKURAN UTAMA)", "akurasi_seimbang", "akurasi_seimbang")
+    with c2:
+        kartu_putusan("MENJARING PASIEN LIVER (RECALL)", "recall_liver", "recall_liver")
+    with c3:
+        kartu_putusan("MENGENALI BUKAN PASIEN (RECALL)", "recall_bukan", "recall_bukan")
+    st.write("")
+
+    # ---- kesimpulan otomatis ----
+    sb = SEL["akurasi_seimbang"]
+    rl, rb = unggul("recall_liver"), unggul("recall_bukan")
+    if not sb["signifikan"]:
+        k1 = (f"Secara keseluruhan kedua algoritma <b>setara</b>: selisih akurasi seimbang hanya {abs(sb['nilai']) * 100:.1f} poin "
+              f"dan tidak nyata secara statistik (ROC-AUC SVM {M['SVM']['auc']:.3f} vs Random Forest {M['Random Forest']['auc']:.3f}).")
+    else:
+        k1 = f"<b>{metrik['best']}</b> unggul secara keseluruhan dengan selisih akurasi seimbang {abs(sb['nilai']) * 100:.1f} poin yang nyata secara statistik."
+    k2 = (f"Perbedaannya ada pada <b>jenis kesalahan</b>: {rl} lebih banyak menjaring pasien liver "
+          f"(recall {pct(M[rl]['recall_liver'])} vs {pct(M['SVM' if rl == 'Random Forest' else 'Random Forest']['recall_liver'])}), "
+          f"sedangkan {rb} lebih tepat mengenali bukan pasien liver "
+          f"(recall {pct(M[rb]['recall_bukan'])} vs {pct(M['SVM' if rb == 'Random Forest' else 'Random Forest']['recall_bukan'])}).") if rl and rb else ""
+    k3 = (f"Untuk keperluan <b>skrining awal</b>, melewatkan pasien liver lebih merugikan daripada salah menandai orang sehat, "
+          f"sehingga <b>{rekom}</b> dijadikan pilihan awal di halaman utama. Untuk keperluan yang butuh prediksi “pasien liver” "
+          f"yang lebih bisa dipercaya (precision), pilih SVM.")
+    H(f'<div class="panel"><div class="panel-title">Kesimpulan</div><div class="kes">{k1}<br><br>{k2}<br><br>{k3}</div></div>')
+
+    # ---- tabel metrik ----
+    BARIS = [("Akurasi", "akurasi", "p"), ("Akurasi seimbang", "akurasi_seimbang", "p"),
+             ("Recall pasien liver", "recall_liver", "p"), ("Recall bukan pasien liver", "recall_bukan", "p"),
+             ("Precision pasien liver", "precision_liver", "p"), ("Precision bukan pasien", "precision_bukan", "p"),
+             ("F1-score (rata-rata)", "f1_macro", "p"), ("ROC-AUC", "auc", "d"),
+             ("Akurasi seimbang validasi silang (data latih)", "cv_bacc", "p")]
+    isi, menang = "", {"SVM": 0, "Random Forest": 0}
+    for label, k, tipe in BARIS:
+        w = unggul(k)
+        if w:
+            menang[w] += 1
+        fm = (lambda v: pct(v)) if tipe == "p" else (lambda v: f"{v:.3f}")
+        sel_s = ' class="win c"' if w == "SVM" else ' class="c"'
+        sel_r = ' class="win c"' if w == "Random Forest" else ' class="c"'
+        isi += f'<tr><td>{label}</td><td{sel_s}>{fm(M["SVM"][k])}</td><td{sel_r}>{fm(M["Random Forest"][k])}</td></tr>'
+    ci_s, ci_r = M["SVM"]["ci_bacc"], M["Random Forest"]["ci_bacc"]
+    H('<div class="panel"><div class="panel-title">Perbandingan ukuran kinerja (data uji)</div>'
+      '<table class="lab"><tr><th>Ukuran</th><th class="c">SVM</th><th class="c">Random Forest</th></tr>'
+      f'{isi}</table><div class="note">Sel berwarna hijau = nilai lebih tinggi pada ukuran tersebut. '
+      f'SVM unggul pada {menang["SVM"]} ukuran, Random Forest pada {menang["Random Forest"]} ukuran. '
+      f'Selang kepercayaan 95% akurasi seimbang: SVM {pct(ci_s[0])} – {pct(ci_s[1])}, Random Forest {pct(ci_r[0])} – {pct(ci_r[1])}.</div></div>')
+
+    # ---- confusion matrix ----
+    def cm_html(nama):
+        cm = M[nama]["confusion_matrix"]
+        return ('<div class="cm">'
+                '<div class="h">Aktual \\ Prediksi</div><div class="h">Pasien liver</div><div class="h">Bukan pasien</div>'
+                f'<div class="h">Pasien liver</div><div class="good">{cm[0][0]}</div><div class="bad">{cm[0][1]}</div>'
+                f'<div class="h">Bukan pasien</div><div class="bad">{cm[1][0]}</div><div class="good">{cm[1][1]}</div></div>')
+    a, b = st.columns(2, gap="large")
     with a:
-        H('<div class="panel"><div class="panel-title">Confusion matrix</div>'
-          '<div class="cm">'
-          '<div class="h">Aktual \\ Prediksi</div><div class="h">Pasien liver</div><div class="h">Bukan pasien</div>'
-          f'<div class="h">Pasien liver</div><div class="good">{cm[0][0]}</div><div class="bad">{cm[0][1]}</div>'
-          f'<div class="h">Bukan pasien</div><div class="bad">{cm[1][0]}</div><div class="good">{cm[1][1]}</div>'
-          '</div><div class="note">Hijau = prediksi benar, merah = prediksi salah.</div></div>')
-        r1, r2 = lap["1"], lap["2"]
-        H('<div class="panel"><div class="panel-title">Laporan klasifikasi</div><table class="lab">'
-          '<tr><th>Kelas</th><th>Precision</th><th>Recall</th><th>F1</th><th>Jumlah</th></tr>'
-          f'<tr><td>1 · Pasien liver</td><td>{r1["precision"]:.2f}</td><td>{r1["recall"]:.2f}</td><td>{r1["f1-score"]:.2f}</td><td>{r1["support"]:.0f}</td></tr>'
-          f'<tr><td>2 · Bukan pasien</td><td>{r2["precision"]:.2f}</td><td>{r2["recall"]:.2f}</td><td>{r2["f1-score"]:.2f}</td><td>{r2["support"]:.0f}</td></tr>'
-          '</table></div>')
+        H(f'<div class="panel"><div class="panel-title">Confusion matrix · SVM</div>{cm_html("SVM")}</div>')
     with b:
-        pt = metrik["param_terbaik"]
-        langkah = [
-            ("Pembersihan data", f"13 baris duplikat dihapus sehingga tersisa {n_data} pasien."),
-            ("Pembagian data", f"{metrik['n_train']} data latih dan {metrik['n_test']} data uji (70 : 30, stratified)."),
-            ("Penskalaan fitur", "StandardScaler menyamakan skala fitur (AST bisa ribuan, albumin hanya sekitar 3)."),
-            ("Model SVM", f"Kernel RBF, C = {pt['svm__C']}, gamma = {pt['svm__gamma']}, class_weight = balanced."),
-        ]
-        isi = "".join(f'<div class="step"><div class="step-n">{i}</div><div><div class="step-t">{t}</div>'
-                      f'<div class="step-d">{d}</div></div></div>' for i, (t, d) in enumerate(langkah, 1))
-        H(f'<div class="panel"><div class="panel-title">Alur pembuatan model</div>{isi}</div>')
-        H('<div class="warn"><b>Catatan:</b> data tidak seimbang (±71% pasien liver), sehingga SVM biasa '
-          'cenderung menebak semua orang sebagai pasien liver. Pembobotan kelas dipakai untuk mengatasinya. '
-          'Model masih sering melewatkan pasien liver, jadi hasilnya hanya untuk pembelajaran.</div>')
+        H(f'<div class="panel"><div class="panel-title">Confusion matrix · Random Forest</div>{cm_html("Random Forest")}</div>')
+
+    # ---- selisih & fitur penting ----
+    a, b = st.columns([1, 1], gap="large")
+    with a:
+        r = ""
+        for label, k in [("Akurasi seimbang", "akurasi_seimbang"), ("Recall pasien liver", "recall_liver"),
+                         ("Recall bukan pasien", "recall_bukan")]:
+            s = SEL[k]
+            bd = ('<span class="badge b-ok">Nyata</span>' if s["signifikan"] else '<span class="badge" style="background:#F1F5F9;color:#475569">Tidak nyata</span>')
+            r += (f'<tr><td>{label}</td><td class="v">{s["nilai"] * 100:+.1f}</td>'
+                  f'<td class="r">{s["ci"][0] * 100:+.1f} s.d. {s["ci"][1] * 100:+.1f}</td><td>{bd}</td></tr>')
+        H('<div class="panel"><div class="panel-title">Uji selisih (Random Forest − SVM)</div>'
+          '<table class="lab"><tr><th>Ukuran</th><th>Selisih (poin)</th><th>Selang 95%</th><th></th></tr>'
+          f'{r}</table><div class="note">Dihitung dengan bootstrap 2000 kali pada data uji ({metrik["n_test"]} pasien). '
+          'Jika selang tidak melewati 0, selisihnya nyata secara statistik; jika melewati 0, selisih bisa saja terjadi karena kebetulan.</div></div>')
+        pt, pr_ = M["SVM"]["param_terbaik"], M["Random Forest"]["param_terbaik"]
+        H('<div class="panel"><div class="panel-title">Parameter terbaik</div><table class="lab">'
+          f'<tr><td>SVM</td><td>kernel RBF, C = {pt["C"]}, gamma = {pt["gamma"]}, class_weight = balanced</td></tr>'
+          f'<tr><td>Random Forest</td><td>{pr_["n_estimators"]} pohon, max_depth = {pr_["max_depth"]}, '
+          f'min_samples_leaf = {pr_["min_samples_leaf"]}, max_features = {pr_["max_features"]}, class_weight = balanced</td></tr></table></div>')
+    with b:
+        imp = M["Random Forest"]["importance"]
+        mx = max(imp.values())
+        NAMA_F = {"Age": "Usia", "Gender": "Jenis kelamin", "Total_Bilirubin": "Bilirubin total",
+                  "Direct_Bilirubin": "Bilirubin direct", "Alkaline_Phosphotase": "ALP",
+                  "Alanine_Aminotransferase": "ALT / SGPT", "Aspartate_Aminotransferase": "AST / SGOT",
+                  "Total_Proteins": "Protein total", "Albumin": "Albumin", "Albumin_and_Globulin_Ratio": "Rasio A : G"}
+        bars = "".join(f'<div class="imp"><div class="imp-n">{NAMA_F[k]}</div><div class="imp-b"><span style="width:{v / mx * 100:.0f}%"></span></div>'
+                       f'<div class="imp-v">{v * 100:.1f}%</div></div>' for k, v in imp.items())
+        H(f'<div class="panel"><div class="panel-title">Fitur terpenting menurut Random Forest</div>{bars}'
+          '<div class="note">Menunjukkan seberapa besar tiap fitur dipakai Random Forest saat memisahkan kedua kelas. '
+          'Ini bukan bukti sebab-akibat.</div></div>')
+
+    H(f'<div class="warn"><b>Catatan:</b> data uji hanya {metrik["n_test"]} pasien, sehingga selisih kecil antar algoritma bisa terjadi karena kebetulan. '
+      'Data juga tidak seimbang (±71% pasien liver), maka akurasi biasa bisa menyesatkan dan dipakai akurasi seimbang sebagai ukuran utama. '
+      'Hasil ini hanya untuk pembelajaran, bukan untuk diagnosis.</div>')
 
 # ==============================================================================
 # Tentang Kami
 # ==============================================================================
 elif choice == 'Tentang Kami':
     hero("Tentang", "Tentang Kami", "Proyek pembelajaran machine learning dengan Streamlit.")
-    H('<div class="panel"><div class="teks">Aplikasi ini dibuat untuk mempelajari penerapan algoritma '
-      '<b>Support Vector Machine</b> pada data pasien penyakit liver. Data berisi hasil pemeriksaan '
-      'laboratorium seperti bilirubin, enzim hati (ALP, ALT, AST), protein, dan albumin, dengan target '
+    H('<div class="panel"><div class="teks">Aplikasi ini dibuat untuk mempelajari dan membandingkan dua algoritma, '
+      '<b>Support Vector Machine</b> dan <b>Random Forest</b>, pada data pasien penyakit liver. Data berisi hasil '
+      'pemeriksaan laboratorium seperti bilirubin, enzim hati (ALP, ALT, AST), protein, dan albumin, dengan target '
       'pasien liver atau bukan.</div></div>')
 
 # ==============================================================================
